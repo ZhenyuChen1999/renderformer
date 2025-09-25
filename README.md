@@ -63,6 +63,7 @@ RenderFormer is a neural rendering pipeline that directly renders an image from 
     + [Example Scene](#example-scene)
     + [HDF5 Data Fields](#hdf5-data-fields)
     + [Remesh Objects](#remesh-objects)
+    + [Rendering Reference with Blender](#rendering-reference-with-blender)
   * [Blender Extension](#blender-extension)
   * [Scene Setting Tips](#scene-setting-tips)
 - [Acknowledgements](#acknowledgements)
@@ -296,6 +297,18 @@ We also provide fields in the scene config JSON file (`remesh` and `remesh_targe
 ```bash
 python3 scene_processor/remesh.py --input path/to/your/high_res_mesh.obj ----output remeshed_object.obj --target_face_num 1024
 ```
+
+### Rendering Reference with Blender
+
+We provide a script at [`scene_processor/to_blend.py`](./scene_processor/to_blend.py) to render the reference images with Blender. It converts the JSON described scene into a Blender scene, so you can render the scene with Blender or save it as a blend file for later use.
+
+Example usage:
+
+```bash
+python3 scene_processor/to_blend.py examples/cbox.json --output_dir tmp/cbox --dump_blend --save_img --spp 4096
+```
+
+For detailed usage, please check the script.
 
 ## Blender Extension
 
