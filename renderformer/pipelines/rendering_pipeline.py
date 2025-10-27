@@ -34,7 +34,8 @@ class RenderFormerRenderingPipeline:
         c2w,
         fov,
         resolution: int = 512,
-        torch_dtype: torch.dtype = torch.float16
+        torch_dtype: torch.dtype = torch.float16,
+        do_texture_log: bool = True
     ):
         """
         Render images using the RenderFormer model
@@ -50,6 +51,7 @@ class RenderFormerRenderingPipeline:
             fov: Field of view tensor [bs, num_views, 1] - in degrees
             resolution: Render resolution (default: 512)
             torch_dtype: PyTorch dtype for inference, default is torch.float16
+            do_texture_log: Whether to apply log encoding to texture irradiance (default: True)
 
         Returns:
             torch.Tensor: Rendered HDR image tensor [bs, num_views, H, W, 3]
@@ -64,7 +66,7 @@ class RenderFormerRenderingPipeline:
             texture = texture[:, :, :, 0, 0]
 
         # Log encode lighting if not learning LDR directly
-        if not self.config.use_ldr:
+        if not self.config.use_ldr and do_texture_log:
             texture[:, :, -3:] = torch.log10(texture[:, :, -3:] + 1.)
 
         # Handle view transformation

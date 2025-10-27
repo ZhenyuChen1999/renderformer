@@ -125,8 +125,11 @@ class RenderThread(QThread):
         self.running = False
         self.rendering = False
         
-        # Scene data
+        # Scene data (CPU)
         self.scene_data = None
+        
+        # Scene data prepared for GPU (cached)
+        self.scene_data_gpu = None
         
         # Camera parameters
         self.camera_position = np.array([0.0, 0.0, 3.0])
@@ -169,6 +172,9 @@ class RenderThread(QThread):
                 'vn': vn,
                 'mask': torch.ones(triangles.shape[0], dtype=torch.bool)
             }
+            
+            # Clear GPU cache when new scene is loaded
+            self.scene_data_gpu = None
     
     def set_camera(self, position, yaw, pitch, up_mode='Y'):
         """Update camera parameters"""
@@ -189,51 +195,64 @@ class RenderThread(QThread):
         self.running = True
         self.status_update.emit("Thread ready")
         
-        # Load pipeline once
-        pipeline = None
-        device = None
+        # Initialize device and pipeline once before loop
+        device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
         
+        from renderformer import RenderFormerRenderingPipeline
+        pipeline = RenderFormerRenderingPipeline.from_pretrained('microsoft/renderformer-v1.1-swin-large')
+        
+        if device == torch.device('cuda') and os.name == 'posix':
+            from renderformer_liger_kernel import apply_kernels
+            apply_kernels(pipeline.model)
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        
+        pipeline.to(device)
+        self.status_update.emit("Pipeline loaded")
+        
+        # Local variables to cache scene data on GPU
+        triangles_gpu = None
+        texture_gpu = None
+        mask_gpu = None
+        vn_gpu = None
+        
+        # Main rendering loop
         while self.running:
             if self.rendering and self.scene_data is not None:
                 try:
                     start_time = time.time()
                     
-                    # Initialize pipeline on first render
-                    if pipeline is None:
-                        device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
-                        from renderformer import RenderFormerRenderingPipeline
-                        pipeline = RenderFormerRenderingPipeline.from_pretrained('microsoft/renderformer-v1.1-swin-large')
+                    # Prepare scene data (transfer to GPU once when scene changes)
+                    if triangles_gpu is None or self.scene_data_gpu is None:
+                        triangles_gpu = self.scene_data['triangles'].unsqueeze(0).to(device)
                         
-                        if device == torch.device('cuda') and os.name == 'posix':
-                            from renderformer_liger_kernel import apply_kernels
-                            apply_kernels(pipeline.model)
-                            torch.backends.cuda.matmul.allow_tf32 = True
-                            torch.backends.cudnn.allow_tf32 = True
+                        # Pre-encode texture lighting (log transform the last 3 channels - irradiance)
+                        texture_cpu = self.scene_data['texture'].clone()
+                        if not pipeline.config.use_ldr:
+                            texture_cpu[:, -3:] = torch.log10(texture_cpu[:, -3:] + 1.)
+                        texture_gpu = texture_cpu.unsqueeze(0).to(device)
                         
-                        pipeline.to(device)
-                        self.status_update.emit("Pipeline loaded")
+                        mask_gpu = self.scene_data['mask'].unsqueeze(0).to(device)
+                        vn_gpu = self.scene_data['vn'].unsqueeze(0).to(device)
+                        self.scene_data_gpu = True  # Flag to indicate data is loaded
+                        self.status_update.emit("Scene data loaded to GPU")
                     
                     # Create camera matrix from current camera state
                     c2w = create_camera_matrix(self.camera_position, self.camera_yaw, self.camera_pitch, self.up_mode)
                     c2w_tensor = torch.from_numpy(c2w).unsqueeze(0).unsqueeze(0).to(device)
                     fov_tensor = torch.tensor([[self.camera_fov]], dtype=torch.float32).unsqueeze(-1).to(device)
                     
-                    # Prepare scene data
-                    triangles = self.scene_data['triangles'].unsqueeze(0).to(device)
-                    texture = self.scene_data['texture'].unsqueeze(0).to(device)
-                    mask = self.scene_data['mask'].unsqueeze(0).to(device)
-                    vn = self.scene_data['vn'].unsqueeze(0).to(device)
-                    
-                    # Render
+                    # Render using cached GPU scene data
                     rendered_imgs = pipeline(
-                        triangles=triangles,
-                        texture=texture,
-                        mask=mask,
-                        vn=vn,
+                        triangles=triangles_gpu,
+                        texture=texture_gpu,
+                        mask=mask_gpu,
+                        vn=vn_gpu,
                         c2w=c2w_tensor,
                         fov=fov_tensor,
                         resolution=512,
                         torch_dtype=torch.float16,
+                        do_texture_log=False,
                     )
                     
                     # Tone map
