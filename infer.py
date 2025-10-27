@@ -31,6 +31,9 @@ def load_single_h5_data(file_path):
 
 def render_to_array(h5_file, model_id='microsoft/renderformer-v1.1-swin-large', 
                    resolution=512, gamma=2.2, precision='fp16'):
+    """
+    Render a single image from an H5 file.
+    """
     device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
     
     pipeline = RenderFormerRenderingPipeline.from_pretrained(model_id)
